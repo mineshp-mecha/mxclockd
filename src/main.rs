@@ -7,7 +7,7 @@ mod waker;
 
 use crate::core::{Core, Due};
 use crate::dbus::{ClockdIface, BUS_NAME, OBJECT_PATH};
-use crate::ring::NotificationsProxy;
+use crate::ring::{LoginManagerProxy, NotificationsProxy};
 use crate::waker::{WakeReason, Waker};
 use anyhow::Result;
 use chrono::Local;
@@ -26,7 +26,11 @@ async fn main() -> Result<()> {
     let state = store::State::load()?;
     let conn = zbus::Connection::session().await?;
     let notifications = NotificationsProxy::new(&conn).await?;
-    let core = Arc::new(Core::new(state, notifications));
+    let login = connect_logind()
+        .await
+        .map_err(|e| tracing::warn!("no logind: alarms can't keep the system awake while ringing: {e}"))
+        .ok();
+    let core = Arc::new(Core::new(state, notifications, login));
 
     // Export the object first, *then* claim the name, so a client started
     // by D-Bus activation never sees the name without the object behind it.
@@ -102,6 +106,11 @@ async fn scheduler(conn: zbus::Connection, core: Arc<Core>) -> Result<()> {
             _ = core.changed.notified() => {}
         }
     }
+}
+
+async fn connect_logind() -> Result<LoginManagerProxy<'static>> {
+    let system = zbus::Connection::system().await?;
+    Ok(LoginManagerProxy::new(&system).await?)
 }
 
 /// Snooze/Dismiss buttons on the notification come back as D-Bus signals.

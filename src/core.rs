@@ -2,7 +2,7 @@
 //! reads it and decides what rings when. `changed` wakes the scheduler.
 
 use crate::model::{Alarm, Timer};
-use crate::ring::{NotificationsProxy, Ringing};
+use crate::ring::{LoginManagerProxy, NotificationsProxy, Ringing};
 use crate::store::State;
 use anyhow::Result;
 use chrono::{DateTime, Duration, Local};
@@ -23,15 +23,22 @@ pub struct Core {
     pub changed: Notify,
     ringing: Mutex<HashMap<String, Ringing>>,
     pub notifications: NotificationsProxy<'static>,
+    /// `None` if the system bus or logind isn't available.
+    login: Option<LoginManagerProxy<'static>>,
 }
 
 impl Core {
-    pub fn new(state: State, notifications: NotificationsProxy<'static>) -> Self {
+    pub fn new(
+        state: State,
+        notifications: NotificationsProxy<'static>,
+        login: Option<LoginManagerProxy<'static>>,
+    ) -> Self {
         Self {
             state: Mutex::new(state),
             changed: Notify::new(),
             ringing: Mutex::new(HashMap::new()),
             notifications,
+            login,
         }
     }
 
@@ -92,7 +99,7 @@ impl Core {
     }
 
     pub async fn start_ringing(&self, id: &str, summary: &str, body: &str, sound: Option<&str>) {
-        let r = Ringing::start(&self.notifications, summary, body, sound).await;
+        let r = Ringing::start(&self.notifications, self.login.as_ref(), summary, body, sound).await;
         if let Some(old) = self.ringing.lock().await.insert(id.to_owned(), r) {
             old.stop(&self.notifications).await;
         }
