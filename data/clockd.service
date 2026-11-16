@@ -1,0 +1,15 @@
+# ~/.config/systemd/user/clockd.service  (or /usr/lib/systemd/user/)
+# Enable with: systemctl --user enable --now clockd
+[Unit]
+Description=Clock daemon (alarms and timers)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.example.Clockd1
+ExecStart=/usr/bin/clockd
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target

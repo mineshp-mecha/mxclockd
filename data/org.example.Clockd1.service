@@ -1,0 +1,7 @@
+# /usr/share/dbus-1/services/org.example.Clockd1.service
+# D-Bus activation: if the UI or launcher calls the daemon while it isn't
+# running, the bus starts it (through systemd, via SystemdService).
+[D-BUS Service]
+Name=org.example.Clockd1
+Exec=/usr/bin/clockd
+SystemdService=clockd.service
