@@ -41,7 +41,12 @@ async fn main() -> Result<()> {
     conn.request_name(BUS_NAME).await?;
     tracing::info!("{BUS_NAME} ready");
 
-    tokio::spawn(handle_notification_actions(core.clone()));
+    let actions_core = core.clone();
+    tokio::spawn(async move {
+        if let Err(e) = handle_notification_actions(actions_core).await {
+            tracing::error!("notification Snooze/Dismiss buttons stopped working: {e:#}");
+        }
+    });
     let tz_core = core.clone();
     tokio::spawn(async move {
         if let Err(e) = tzwatch::watch(tz_core).await {
@@ -70,12 +75,11 @@ async fn scheduler(conn: zbus::Connection, core: Arc<Core>) -> Result<()> {
 
     let mut waker = Waker::new()?;
     tracing::info!(can_wake_system = waker.can_wake_system, "scheduler started");
-    let mut last_check = Local::now();
     let mut last_next_alarm = None;
 
     loop {
         let now = Local::now();
-        for due in core.take_due(last_check, now).await? {
+        for due in core.take_due(now).await {
             match due {
                 Due::Alarm { id, label, sound } => {
                     tracing::info!("alarm {id} ringing");
@@ -91,7 +95,6 @@ async fn scheduler(conn: zbus::Connection, core: Arc<Core>) -> Result<()> {
                 }
             }
         }
-        last_check = now;
 
         let (deadline, next_alarm) = {
             let state = core.state.lock().await;
@@ -105,9 +108,9 @@ async fn scheduler(conn: zbus::Connection, core: Arc<Core>) -> Result<()> {
         tokio::select! {
             reason = waker.sleep_until(deadline) => {
                 if let WakeReason::ClockChanged = reason? {
+                    // take_due clamps the saved last check, so a backwards
+                    // jump isn't treated as "time passed".
                     tracing::info!("system clock changed, rescheduling");
-                    // Don't treat a backwards jump as "time passed".
-                    last_check = last_check.min(Local::now());
                 }
             }
             _ = core.changed.notified() => {}
@@ -123,17 +126,27 @@ async fn connect_logind() -> Result<LoginManagerProxy<'static>> {
 /// Snooze/Dismiss buttons on the notification come back as D-Bus signals.
 async fn handle_notification_actions(core: Arc<Core>) -> Result<()> {
     let mut actions = core.notifications.receive_action_invoked().await?;
+    // One bad signal or failed snooze must not end this loop: nothing would
+    // handle the buttons afterwards, and nobody would know.
     while let Some(signal) = actions.next().await {
-        let args = signal.args()?;
+        let args = match signal.args() {
+            Ok(args) => args,
+            Err(e) => {
+                tracing::warn!("ignoring malformed ActionInvoked signal: {e}");
+                continue;
+            }
+        };
         let Some(id) = core.id_for_notification(args.id).await else { continue };
         match args.action_key.as_str() {
             "snooze" => {
-                core.snooze(&id, 5).await?;
+                if let Err(e) = core.snooze(&id, 5).await {
+                    tracing::warn!("snoozing {id}: {e:#}");
+                }
             }
             _ => {
                 core.dismiss(&id).await;
             }
         }
     }
-    Ok(())
+    anyhow::bail!("notification signal stream ended")
 }

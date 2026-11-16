@@ -9,6 +9,10 @@ use std::path::PathBuf;
 pub struct State {
     pub alarms: Vec<Alarm>,
     pub timers: Vec<Timer>,
+    /// Unix timestamp the scheduler last checked up to. Persisted so that
+    /// after a power-off or crash we still see what came due in between.
+    #[serde(default)]
+    pub last_check: Option<i64>,
 }
 
 fn state_path() -> Result<PathBuf> {

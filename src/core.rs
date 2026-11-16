@@ -42,11 +42,13 @@ impl Core {
         }
     }
 
-    /// Persist, then wake the scheduler so it recomputes the next deadline.
+    /// Persist, and wake the scheduler so it recomputes the next deadline.
+    /// The in-memory state has already changed, so the scheduler is woken
+    /// even if saving fails; otherwise e.g. a snooze would never ring.
     pub async fn commit(&self, state: &State) -> Result<()> {
-        state.save()?;
+        let saved = state.save();
         self.changed.notify_one();
-        Ok(())
+        saved
     }
 
     /// Earliest upcoming alarm or timer.
@@ -64,38 +66,18 @@ impl Core {
         state.alarms.iter().filter_map(|a| a.next_fire(now)).min()
     }
 
-    /// Everything that should have fired in (since, now]. Updates the state
-    /// (one-shot alarms get disabled, finished timers removed, snoozes cleared).
-    pub async fn take_due(&self, since: DateTime<Local>, now: DateTime<Local>) -> Result<Vec<Due>> {
+    /// Everything that should have fired since the last check, up to `now`.
+    /// Updates and saves the state (one-shot alarms get disabled, finished
+    /// timers removed, snoozes cleared, `last_check` moved to `now`).
+    pub async fn take_due(&self, now: DateTime<Local>) -> Vec<Due> {
         let mut state = self.state.lock().await;
-        let mut due = Vec::new();
-
-        for a in state.alarms.iter_mut() {
-            let Some(at) = a.next_fire(since) else { continue };
-            if at > now {
-                continue;
-            }
-            a.snoozed_until = None;
-            if a.days == 0 {
-                a.enabled = false; // one-shot
-            }
-            if now - at > MISSED_GRACE {
-                tracing::info!("missed alarm {} at {at}, not ringing late", a.id);
-                continue;
-            }
-            due.push(Due::Alarm { id: a.id.clone(), label: a.label.clone(), sound: a.sound.clone() });
+        let due = collect_due(&mut state, now);
+        // Not fatal: the worst case is re-ringing after a restart, which is
+        // better than the scheduler (and every alarm) stopping.
+        if let Err(e) = state.save() {
+            tracing::warn!("could not save state: {e:#}");
         }
-
-        let now_ts = now.timestamp();
-        let (finished, running): (Vec<Timer>, Vec<Timer>) =
-            std::mem::take(&mut state.timers).into_iter().partition(|t| t.ends_at <= now_ts);
-        state.timers = running;
-        due.extend(finished.into_iter().map(|t| Due::Timer { id: t.id, label: t.label }));
-
-        if !due.is_empty() {
-            state.save()?;
-        }
-        Ok(due)
+        due
     }
 
     pub async fn start_ringing(&self, id: &str, summary: &str, body: &str, sound: Option<&str>) {
@@ -137,5 +119,99 @@ impl Core {
             .iter()
             .find(|(_, r)| r.notification_id == Some(notification_id))
             .map(|(id, _)| id.clone())
+    }
+}
+
+/// The pure part of `take_due`: what is due in (state.last_check, now].
+fn collect_due(state: &mut State, now: DateTime<Local>) -> Vec<Due> {
+    // No saved check yet (first run): nothing is "missed". A saved check in
+    // the future means the clock went backwards; don't treat that as time passed.
+    let since = state
+        .last_check
+        .and_then(|ts| DateTime::from_timestamp(ts, 0))
+        .map(|t| t.with_timezone(&Local).min(now))
+        .unwrap_or(now);
+    state.last_check = Some(now.timestamp());
+
+    let mut due = Vec::new();
+    for a in state.alarms.iter_mut() {
+        let Some(at) = a.next_fire(since) else { continue };
+        if at > now {
+            continue;
+        }
+        a.snoozed_until = None;
+        if a.days == 0 {
+            a.enabled = false; // one-shot
+        }
+        if now - at > MISSED_GRACE {
+            tracing::info!("missed alarm {} at {at}, not ringing late", a.id);
+            continue;
+        }
+        due.push(Due::Alarm { id: a.id.clone(), label: a.label.clone(), sound: a.sound.clone() });
+    }
+
+    let now_ts = now.timestamp();
+    let (finished, running): (Vec<Timer>, Vec<Timer>) =
+        std::mem::take(&mut state.timers).into_iter().partition(|t| t.ends_at <= now_ts);
+    state.timers = running;
+    due.extend(finished.into_iter().map(|t| Due::Timer { id: t.id, label: t.label }));
+    due
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn state_with_alarm(hour: u8, minute: u8, days: u8, last_check: DateTime<Local>) -> State {
+        State {
+            alarms: vec![Alarm {
+                id: "a".into(),
+                label: String::new(),
+                hour,
+                minute,
+                days,
+                enabled: true,
+                snoozed_until: None,
+                sound: None,
+            }],
+            timers: vec![],
+            last_check: Some(last_check.timestamp()),
+        }
+    }
+
+    fn at(h: u32, m: u32) -> DateTime<Local> {
+        Local.with_ymd_and_hms(2026, 11, 16, h, m, 0).unwrap()
+    }
+
+    #[test]
+    fn one_shot_missed_while_off_is_disabled_not_rung_tomorrow() {
+        // Off from 06:00 to 08:00; a one-shot alarm at 07:00 was missed by an hour.
+        let mut state = state_with_alarm(7, 0, 0, at(6, 0));
+        let due = collect_due(&mut state, at(8, 0));
+        assert!(due.is_empty());
+        assert!(!state.alarms[0].enabled);
+    }
+
+    #[test]
+    fn short_reboot_rings_late_within_grace() {
+        // Rebooted 06:58 -> 07:05; the 07:00 alarm should still ring.
+        let mut state = state_with_alarm(7, 0, 0b111_1111, at(6, 58));
+        let due = collect_due(&mut state, at(7, 5));
+        assert!(matches!(due.as_slice(), [Due::Alarm { .. }]));
+        assert_eq!(state.last_check, Some(at(7, 5).timestamp()));
+    }
+
+    #[test]
+    fn first_run_and_backwards_clock_ring_nothing() {
+        let mut state = state_with_alarm(7, 0, 0, at(6, 0));
+        state.last_check = None;
+        assert!(collect_due(&mut state, at(8, 0)).is_empty());
+        assert!(state.alarms[0].enabled);
+
+        // Last checked at 08:00, clock set back to 06:30: nothing has "passed".
+        state.last_check = Some(at(8, 0).timestamp());
+        assert!(collect_due(&mut state, at(6, 30)).is_empty());
+        assert!(state.alarms[0].enabled);
     }
 }
