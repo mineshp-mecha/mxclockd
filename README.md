@@ -1,7 +1,7 @@
 # clockd
 
-A minimal alarm/timer daemon for Linux, in Rust. Your clock UI and your
-launcher are D-Bus clients of it; it keeps working when they're closed.
+A minimal alarm/timer daemon for Linux, in Rust. Clock UI and
+Launcher are D-Bus clients of it; it keeps working when they're closed.
 
 ## Layout
 
