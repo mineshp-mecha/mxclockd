@@ -3,6 +3,7 @@ mod dbus;
 mod model;
 mod ring;
 mod store;
+mod tzwatch;
 mod waker;
 
 use crate::core::{Core, Due};
@@ -41,6 +42,12 @@ async fn main() -> Result<()> {
     tracing::info!("{BUS_NAME} ready");
 
     tokio::spawn(handle_notification_actions(core.clone()));
+    let tz_core = core.clone();
+    tokio::spawn(async move {
+        if let Err(e) = tzwatch::watch(tz_core).await {
+            tracing::warn!("not watching /etc/localtime, time zone changes need a restart: {e}");
+        }
+    });
     let scheduler = tokio::spawn(scheduler(conn.clone(), core.clone()));
 
     let mut term = signal(SignalKind::terminate())?;
