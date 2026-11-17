@@ -22,11 +22,24 @@ Launcher are D-Bus clients of it; it keeps working when they're closed.
     cargo run
     # in another terminal
     busctl --user call org.mechanix.services.Clock /org/mechanix/services/Clock org.mechanix.services.Clock AddTimer us 10 "Tea"
-    busctl --user call org.mechanix.services.Clock /org/mechanix/services/Clock org.mechanix.services.Clock AddAlarm yyys 7 30 31 "Work"
+    busctl --user call org.mechanix.services.Clock /org/mechanix/services/Clock org.mechanix.services.Clock AddAlarm syyysuu "Work" 7 30 31 "" 5 10
     busctl --user get-property org.mechanix.services.Clock /org/mechanix/services/Clock org.mechanix.services.Clock NextAlarm
     busctl --user monitor org.mechanix.services.Clock     # watch AlarmRinging / TimerFinished
 
-`days` is a bitmask: bit 0 = Monday ... bit 6 = Sunday (31 = weekdays, 127 = every day, 0 = once).
+`AddAlarm` takes: label, hour, minute, days, sound, ring minutes, snooze
+minutes. `UpdateAlarm` takes the
+alarm id followed by the same fields, and `ListAlarms` returns them all.
+
+* `days` is a bitmask: bit 0 = Monday ... bit 6 = Sunday (31 = weekdays,
+  127 = every day, 0 = once). Monday + Tuesday + Friday = 1 + 2 + 16 = 19.
+* `sound` is an absolute path to an audio file, or `""` for the default
+  (`/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga`). It must be
+  readable when the alarm is saved; if it's gone by the time the alarm rings,
+  the default plays instead. Prefer WAV/OGG/FLAC (`pw-play` uses libsndfile).
+* Ring minutes (1..=60): the alarm stops ringing on its own after this long.
+  Timers ring for 5 minutes.
+* Snooze minutes (1..=60): used by the notification's Snooze button and by
+  `Snooze(id)`.
 
 ## Waking from suspend
 
@@ -39,7 +52,6 @@ but don't wake a suspended device). Options:
   single-purpose devices (phones, kiosks).
 * Keep the daemon unprivileged and add a small system-bus helper (polkit-guarded)
   that only schedules RTC wakeups.
-* On KDE Plasma, ask PowerDevil to schedule the wakeup (what kclockd does).
 
 ## Staying awake while ringing
 

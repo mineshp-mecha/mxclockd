@@ -8,6 +8,7 @@ mod waker;
 
 use crate::core::{Core, Due};
 use crate::dbus::{ClockdIface, BUS_NAME, OBJECT_PATH};
+use crate::model::DEFAULT_RING_MINUTES;
 use crate::ring::{LoginManagerProxy, NotificationsProxy};
 use crate::waker::{WakeReason, Waker};
 use anyhow::Result;
@@ -81,16 +82,16 @@ async fn scheduler(conn: zbus::Connection, core: Arc<Core>) -> Result<()> {
         let now = Local::now();
         for due in core.take_due(now).await {
             match due {
-                Due::Alarm { id, label, sound } => {
+                Due::Alarm { id, label, sound, ring_minutes } => {
                     tracing::info!("alarm {id} ringing");
                     let title = if label.is_empty() { "Alarm".to_owned() } else { label.clone() };
                     let body = now.format("%H:%M").to_string();
-                    core.start_ringing(&id, &title, &body, sound.as_deref()).await;
+                    core.start_ringing(&id, &title, &body, sound.as_deref(), ring_minutes).await;
                     ClockdIface::alarm_ringing(emitter, &id, &label).await?;
                 }
                 Due::Timer { id, label } => {
                     tracing::info!("timer {id} finished");
-                    core.start_ringing(&id, "Timer finished", &label, None).await;
+                    core.start_ringing(&id, "Timer finished", &label, None, DEFAULT_RING_MINUTES).await;
                     ClockdIface::timer_finished(emitter, &id, &label).await?;
                 }
             }
@@ -143,7 +144,7 @@ async fn handle_notification_signals(core: Arc<Core>) -> Result<()> {
                 let Some(id) = core.id_for_notification(args.id).await else { continue };
                 match args.action_key.as_str() {
                     "snooze" => {
-                        if let Err(e) = core.snooze(&id, 5).await {
+                        if let Err(e) = core.snooze(&id).await {
                             tracing::warn!("snoozing {id}: {e:#}");
                         }
                     }

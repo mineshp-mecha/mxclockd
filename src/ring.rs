@@ -10,7 +10,7 @@ use zbus::zvariant::{OwnedFd, Value};
 const DEFAULT_SOUND: &str = "/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga";
 
 /// Client side of the freedesktop notification spec. Any notification
-/// server (Plasma, GNOME, mako, dunst, or one built into your shell) works.
+/// server works, including one built into the launcher.
 #[zbus::proxy(
     interface = "org.freedesktop.Notifications",
     default_service = "org.freedesktop.Notifications",
@@ -58,6 +58,7 @@ pub trait LoginManager {
 
 /// A ringing alarm or timer. Dropping/stopping it silences the sound.
 pub struct Ringing {
+    pub seq: u64,
     pub notification_id: Option<u32>,
     summary: String,
     body: String,
@@ -72,6 +73,7 @@ impl Ringing {
     pub async fn start(
         notifications: &NotificationsProxy<'_>,
         login: Option<&LoginManagerProxy<'_>>,
+        seq: u64,
         summary: &str,
         body: &str,
         sound: Option<&str>,
@@ -89,7 +91,7 @@ impl Ringing {
 
         let notification_id = show(notifications, summary, body).await;
 
-        let path = sound.unwrap_or(DEFAULT_SOUND).to_owned();
+        let path = sound_path(sound);
         let sound = tokio::spawn(async move {
             loop {
                 if !play_once(&path).await {
@@ -100,6 +102,7 @@ impl Ringing {
         });
 
         Self {
+            seq,
             notification_id,
             summary: summary.to_owned(),
             body: body.to_owned(),
@@ -150,6 +153,19 @@ async fn show(notifications: &NotificationsProxy<'_>, summary: &str, body: &str)
         .await
         .map_err(|e| tracing::warn!("could not show notification: {e}"))
         .ok()
+}
+
+/// The alarm's own sound if it's still there, otherwise the default, so a
+/// deleted or moved file doesn't make the alarm silent.
+fn sound_path(sound: Option<&str>) -> String {
+    match sound {
+        Some(path) if std::fs::File::open(path).is_ok() => path.to_owned(),
+        Some(path) => {
+            tracing::warn!("can't read sound {path}, using the default");
+            DEFAULT_SOUND.to_owned()
+        }
+        None => DEFAULT_SOUND.to_owned(),
+    }
 }
 
 /// Play the file once with PipeWire, falling back to PulseAudio's player.

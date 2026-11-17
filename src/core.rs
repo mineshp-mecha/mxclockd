@@ -7,6 +7,8 @@ use crate::store::State;
 use anyhow::Result;
 use chrono::{DateTime, Duration, Local};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 
 /// If the machine was off/asleep and an alarm was missed by more than this,
@@ -14,7 +16,7 @@ use tokio::sync::{Mutex, Notify};
 const MISSED_GRACE: Duration = Duration::minutes(30);
 
 pub enum Due {
-    Alarm { id: String, label: String, sound: Option<String> },
+    Alarm { id: String, label: String, sound: Option<String>, ring_minutes: u32 },
     Timer { id: String, label: String },
 }
 
@@ -22,6 +24,9 @@ pub struct Core {
     pub state: Mutex<State>,
     pub changed: Notify,
     ringing: Mutex<HashMap<String, Ringing>>,
+    /// Tells one ringing of an id apart from a later one, so a stale
+    /// ring-duration timeout can't stop the next ring.
+    ring_seq: AtomicU64,
     pub notifications: NotificationsProxy<'static>,
     /// `None` if the system bus or logind isn't available.
     login: Option<LoginManagerProxy<'static>>,
@@ -37,6 +42,7 @@ impl Core {
             state: Mutex::new(state),
             changed: Notify::new(),
             ringing: Mutex::new(HashMap::new()),
+            ring_seq: AtomicU64::new(0),
             notifications,
             login,
         }
@@ -80,10 +86,36 @@ impl Core {
         due
     }
 
-    pub async fn start_ringing(&self, id: &str, summary: &str, body: &str, sound: Option<&str>) {
-        let r = Ringing::start(&self.notifications, self.login.as_ref(), summary, body, sound).await;
+    /// Ring until dismissed or snoozed, or for `ring_minutes` at most.
+    pub async fn start_ringing(
+        self: &Arc<Self>,
+        id: &str,
+        summary: &str,
+        body: &str,
+        sound: Option<&str>,
+        ring_minutes: u32,
+    ) {
+        let seq = self.ring_seq.fetch_add(1, Ordering::Relaxed);
+        let r = Ringing::start(&self.notifications, self.login.as_ref(), seq, summary, body, sound).await;
         if let Some(old) = self.ringing.lock().await.insert(id.to_owned(), r) {
             old.stop(&self.notifications).await;
+        }
+
+        let core = self.clone();
+        let id = id.to_owned();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(u64::from(ring_minutes) * 60)).await;
+            core.ring_timed_out(&id, seq).await;
+        });
+    }
+
+    async fn ring_timed_out(&self, id: &str, seq: u64) {
+        let mut ringing = self.ringing.lock().await;
+        if ringing.get(id).is_some_and(|r| r.seq == seq) {
+            let r = ringing.remove(id).unwrap();
+            drop(ringing);
+            tracing::info!("{id} rang unanswered, stopping");
+            r.stop(&self.notifications).await;
         }
     }
 
@@ -99,13 +131,15 @@ impl Core {
         }
     }
 
-    pub async fn snooze(&self, id: &str, minutes: u32) -> Result<bool> {
+    /// Put the alarm off by its own snooze length.
+    pub async fn snooze(&self, id: &str) -> Result<bool> {
         let was_ringing = self.dismiss(id).await;
         let mut state = self.state.lock().await;
         let Some(alarm) = state.alarms.iter_mut().find(|a: &&mut Alarm| a.id == id) else {
             return Ok(false);
         };
         alarm.enabled = true;
+        let minutes = alarm.snooze_minutes;
         alarm.snoozed_until = Some((Local::now() + Duration::minutes(minutes.into())).timestamp());
         self.commit(&state).await?;
         Ok(was_ringing)
@@ -166,7 +200,12 @@ fn collect_due(state: &mut State, now: DateTime<Local>) -> Vec<Due> {
             tracing::info!("missed alarm {} at {at}, not ringing late", a.id);
             continue;
         }
-        due.push(Due::Alarm { id: a.id.clone(), label: a.label.clone(), sound: a.sound.clone() });
+        due.push(Due::Alarm {
+            id: a.id.clone(),
+            label: a.label.clone(),
+            sound: a.sound.clone(),
+            ring_minutes: a.ring_minutes,
+        });
     }
 
     let now_ts = now.timestamp();
@@ -193,6 +232,8 @@ mod tests {
                 enabled: true,
                 snoozed_until: None,
                 sound: None,
+                ring_minutes: 5,
+                snooze_minutes: 5,
             }],
             timers: vec![],
             last_check: Some(last_check.timestamp()),

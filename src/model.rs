@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 /// `0` means "one-shot": ring once at the next matching time, then disable.
 pub type DayMask = u8;
 
+/// Used when an alarm doesn't say otherwise, and for timers.
+pub const DEFAULT_RING_MINUTES: u32 = 5;
+pub const DEFAULT_SNOOZE_MINUTES: u32 = 5;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Alarm {
     pub id: String,
@@ -21,6 +25,20 @@ pub struct Alarm {
     /// Sound file to play; `None` means the daemon's default.
     #[serde(default)]
     pub sound: Option<String>,
+    /// Stop ringing on its own after this many minutes.
+    #[serde(default = "default_ring_minutes")]
+    pub ring_minutes: u32,
+    /// How long Snooze puts the alarm off.
+    #[serde(default = "default_snooze_minutes")]
+    pub snooze_minutes: u32,
+}
+
+fn default_ring_minutes() -> u32 {
+    DEFAULT_RING_MINUTES
+}
+
+fn default_snooze_minutes() -> u32 {
+    DEFAULT_SNOOZE_MINUTES
 }
 
 impl Alarm {
@@ -80,6 +98,8 @@ mod tests {
             enabled: true,
             snoozed_until: None,
             sound: None,
+            ring_minutes: DEFAULT_RING_MINUTES,
+            snooze_minutes: DEFAULT_SNOOZE_MINUTES,
         }
     }
 
