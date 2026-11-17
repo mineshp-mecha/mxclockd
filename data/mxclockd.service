@@ -1,5 +1,5 @@
-# ~/.config/systemd/user/clockd.service  (or /usr/lib/systemd/user/)
-# Enable with: systemctl --user enable --now clockd
+# ~/.config/systemd/user/mxclockd.service  (or /usr/lib/systemd/user/)
+# Enable with: systemctl --user enable --now mxclockd
 [Unit]
 Description=Clock daemon (alarms and timers)
 PartOf=graphical-session.target
@@ -8,7 +8,7 @@ After=graphical-session.target
 [Service]
 Type=dbus
 BusName=org.mechanix.services.Clock
-ExecStart=/usr/bin/clockd
+ExecStart=/usr/bin/mxclockd
 Restart=on-failure
 
 [Install]

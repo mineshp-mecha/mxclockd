@@ -82,7 +82,7 @@ impl Ringing {
         // idle policy may try to suspend it again before anyone dismisses.
         let _inhibit = match login {
             Some(login) => login
-                .inhibit("sleep:idle", "clockd", "An alarm is ringing", "block")
+                .inhibit("sleep:idle", "mxclockd", "An alarm is ringing", "block")
                 .await
                 .map_err(|e| tracing::warn!("could not inhibit suspend: {e}"))
                 .ok(),

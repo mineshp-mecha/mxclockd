@@ -3,5 +3,5 @@
 # running, the bus starts it (through systemd, via SystemdService).
 [D-BUS Service]
 Name=org.mechanix.services.Clock
-Exec=/usr/bin/clockd
-SystemdService=clockd.service
+Exec=/usr/bin/mxclockd
+SystemdService=mxclockd.service

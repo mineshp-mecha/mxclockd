@@ -1,5 +1,5 @@
 [package]
-name = "clockd"
+name = "mxclockd"
 version = "0.1.0"
 edition = "2021"
 description = "Background daemon for alarms and timers"

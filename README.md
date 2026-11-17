@@ -1,4 +1,4 @@
-# clockd
+# mxclockd
 
 A minimal alarm/timer daemon for Linux, in Rust. Clock UI and
 Launcher are D-Bus clients of it; it keeps working when they're closed.
@@ -14,7 +14,7 @@ Launcher are D-Bus clients of it; it keeps working when they're closed.
 | `src/waker.rs`  | timerfd on `CLOCK_REALTIME_ALARM`: wakes from suspend, detects clock changes |
 | `src/tzwatch.rs` | inotify on `/etc/localtime`: reschedules when the time zone changes |
 | `src/ring.rs`   | freedesktop notification + looping sound (`pw-play`, falling back to `paplay`) + logind sleep inhibitor |
-| `src/store.rs`  | JSON persistence in `$XDG_DATA_HOME/clockd/state.json` (fsync'd; a corrupt file is moved to `state.json.bad`) |
+| `src/store.rs`  | JSON persistence in `$XDG_DATA_HOME/mxclockd/state.json` (fsync'd; a corrupt file is moved to `state.json.bad`) |
 | `data/`         | systemd user unit and D-Bus activation file |
 
 ## Run it
@@ -48,7 +48,7 @@ warning and falls back to `CLOCK_REALTIME` (alarms ring on time while awake,
 but don't wake a suspended device). Options:
 
 * Give the binary the file capability:
-  `sudo setcap cap_wake_alarm+ep /usr/bin/clockd`. Simple and common on
+  `sudo setcap cap_wake_alarm+ep /usr/bin/mxclockd`. Simple and common on
   single-purpose devices (phones, kiosks).
 * Keep the daemon unprivileged and add a small system-bus helper (polkit-guarded)
   that only schedules RTC wakeups.

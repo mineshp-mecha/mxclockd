@@ -1,4 +1,4 @@
-//! Persistence: alarms and timers live in $XDG_DATA_HOME/clockd/state.json.
+//! Persistence: alarms and timers live in $XDG_DATA_HOME/mxclockd/state.json.
 
 use crate::model::{Alarm, Timer};
 use anyhow::{Context, Result};
@@ -19,7 +19,7 @@ pub struct State {
 fn state_path() -> Result<PathBuf> {
     let dir = dirs::data_dir()
         .context("no XDG data dir")?
-        .join("clockd");
+        .join("mxclockd");
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join("state.json"))
 }
