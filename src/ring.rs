@@ -2,7 +2,7 @@
 //! looping sound, both of which stop when the alarm is dismissed or snoozed.
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::task::JoinHandle;
 use zbus::zvariant::{OwnedFd, Value};
@@ -34,7 +34,17 @@ pub trait Notifications {
 
     #[zbus(signal)]
     fn action_invoked(&self, id: u32, action_key: String) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    fn notification_closed(&self, id: u32, reason: u32) -> zbus::Result<()>;
 }
+
+/// `reason` in NotificationClosed: the user closed it (e.g. swiped it away).
+pub const CLOSED_BY_USER: u32 = 2;
+
+/// Don't re-show a closed notification more often than this, in case the
+/// server closes every notification straight away (e.g. do-not-disturb).
+const RESHOW_INTERVAL: Duration = Duration::from_secs(5);
 
 /// systemd-logind, on the system bus. We only need inhibitor locks.
 #[zbus::proxy(
@@ -49,6 +59,9 @@ pub trait LoginManager {
 /// A ringing alarm or timer. Dropping/stopping it silences the sound.
 pub struct Ringing {
     pub notification_id: Option<u32>,
+    summary: String,
+    body: String,
+    shown_at: Instant,
     sound: JoinHandle<()>,
     /// logind releases the lock when this fd is closed, i.e. when the
     /// Ringing is stopped or dropped.
@@ -74,25 +87,7 @@ impl Ringing {
             None => None,
         };
 
-        let mut hints = HashMap::new();
-        hints.insert("urgency", Value::U8(2)); // critical: shown over fullscreen apps
-        hints.insert("resident", Value::Bool(true)); // stay after an action is clicked
-        hints.insert("category", Value::from("alarm"));
-
-        let notification_id = notifications
-            .notify(
-                "Clock",
-                0,
-                "alarm-symbolic",
-                summary,
-                body,
-                &["snooze", "Snooze", "dismiss", "Dismiss"],
-                hints,
-                0, // never expire
-            )
-            .await
-            .map_err(|e| tracing::warn!("could not show notification: {e}"))
-            .ok();
+        let notification_id = show(notifications, summary, body).await;
 
         let path = sound.unwrap_or(DEFAULT_SOUND).to_owned();
         let sound = tokio::spawn(async move {
@@ -104,7 +99,26 @@ impl Ringing {
             }
         });
 
-        Self { notification_id, sound, _inhibit }
+        Self {
+            notification_id,
+            summary: summary.to_owned(),
+            body: body.to_owned(),
+            shown_at: Instant::now(),
+            sound,
+            _inhibit,
+        }
+    }
+
+    /// Show the notification again after it was closed while still ringing,
+    /// so the Snooze/Dismiss buttons come back. Returns false if it was
+    /// re-shown too recently and was left closed.
+    pub async fn reshow(&mut self, notifications: &NotificationsProxy<'_>) -> bool {
+        if self.shown_at.elapsed() < RESHOW_INTERVAL {
+            return false;
+        }
+        self.notification_id = show(notifications, &self.summary, &self.body).await;
+        self.shown_at = Instant::now();
+        true
     }
 
     pub async fn stop(self, notifications: &NotificationsProxy<'_>) {
@@ -114,6 +128,28 @@ impl Ringing {
             let _ = notifications.close_notification(id).await;
         }
     }
+}
+
+async fn show(notifications: &NotificationsProxy<'_>, summary: &str, body: &str) -> Option<u32> {
+    let mut hints = HashMap::new();
+    hints.insert("urgency", Value::U8(2)); // critical: shown over fullscreen apps
+    hints.insert("resident", Value::Bool(true)); // stay after an action is clicked
+    hints.insert("category", Value::from("alarm"));
+
+    notifications
+        .notify(
+            "Clock",
+            0,
+            "alarm-symbolic",
+            summary,
+            body,
+            &["snooze", "Snooze", "dismiss", "Dismiss"],
+            hints,
+            0, // never expire
+        )
+        .await
+        .map_err(|e| tracing::warn!("could not show notification: {e}"))
+        .ok()
 }
 
 /// Play the file once with PipeWire, falling back to PulseAudio's player.

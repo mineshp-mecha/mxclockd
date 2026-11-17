@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
 
     let actions_core = core.clone();
     tokio::spawn(async move {
-        if let Err(e) = handle_notification_actions(actions_core).await {
+        if let Err(e) = handle_notification_signals(actions_core).await {
             tracing::error!("notification Snooze/Dismiss buttons stopped working: {e:#}");
         }
     });
@@ -123,29 +123,45 @@ async fn connect_logind() -> Result<LoginManagerProxy<'static>> {
     Ok(LoginManagerProxy::new(&system).await?)
 }
 
-/// Snooze/Dismiss buttons on the notification come back as D-Bus signals.
-async fn handle_notification_actions(core: Arc<Core>) -> Result<()> {
+/// Snooze/Dismiss buttons, and the notification being closed, come back as
+/// D-Bus signals.
+async fn handle_notification_signals(core: Arc<Core>) -> Result<()> {
     let mut actions = core.notifications.receive_action_invoked().await?;
+    let mut closed = core.notifications.receive_notification_closed().await?;
     // One bad signal or failed snooze must not end this loop: nothing would
     // handle the buttons afterwards, and nobody would know.
-    while let Some(signal) = actions.next().await {
-        let args = match signal.args() {
-            Ok(args) => args,
-            Err(e) => {
-                tracing::warn!("ignoring malformed ActionInvoked signal: {e}");
-                continue;
-            }
-        };
-        let Some(id) = core.id_for_notification(args.id).await else { continue };
-        match args.action_key.as_str() {
-            "snooze" => {
-                if let Err(e) = core.snooze(&id, 5).await {
-                    tracing::warn!("snoozing {id}: {e:#}");
+    loop {
+        tokio::select! {
+            Some(signal) = actions.next() => {
+                let args = match signal.args() {
+                    Ok(args) => args,
+                    Err(e) => {
+                        tracing::warn!("ignoring malformed ActionInvoked signal: {e}");
+                        continue;
+                    }
+                };
+                let Some(id) = core.id_for_notification(args.id).await else { continue };
+                match args.action_key.as_str() {
+                    "snooze" => {
+                        if let Err(e) = core.snooze(&id, 5).await {
+                            tracing::warn!("snoozing {id}: {e:#}");
+                        }
+                    }
+                    "dismiss" => {
+                        core.dismiss(&id).await;
+                    }
+                    // "default" is a tap on the notification body: looking at
+                    // an alarm must not silence it.
+                    other => tracing::debug!("ignoring action {other:?} for {id}"),
                 }
             }
-            _ => {
-                core.dismiss(&id).await;
+            Some(signal) = closed.next() => {
+                match signal.args() {
+                    Ok(args) => core.notification_closed(args.id, args.reason).await,
+                    Err(e) => tracing::warn!("ignoring malformed NotificationClosed signal: {e}"),
+                }
             }
+            else => break,
         }
     }
     anyhow::bail!("notification signal stream ended")

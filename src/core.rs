@@ -2,7 +2,7 @@
 //! reads it and decides what rings when. `changed` wakes the scheduler.
 
 use crate::model::{Alarm, Timer};
-use crate::ring::{LoginManagerProxy, NotificationsProxy, Ringing};
+use crate::ring::{LoginManagerProxy, NotificationsProxy, Ringing, CLOSED_BY_USER};
 use crate::store::State;
 use anyhow::Result;
 use chrono::{DateTime, Duration, Local};
@@ -109,6 +109,25 @@ impl Core {
         alarm.snoozed_until = Some((Local::now() + Duration::minutes(minutes.into())).timestamp());
         self.commit(&state).await?;
         Ok(was_ringing)
+    }
+
+    /// The notification of something still ringing was closed. If the user
+    /// closed it they meant to stop it; otherwise (expired, closed by the
+    /// server) show it again, or the sound would play with no way to stop it.
+    pub async fn notification_closed(&self, notification_id: u32, reason: u32) {
+        let Some(id) = self.id_for_notification(notification_id).await else { return };
+        if reason == CLOSED_BY_USER {
+            tracing::info!("notification for {id} closed by the user, dismissing");
+            self.dismiss(&id).await;
+            return;
+        }
+        let mut ringing = self.ringing.lock().await;
+        let Some(r) = ringing.get_mut(&id) else { return };
+        if r.reshow(&self.notifications).await {
+            tracing::info!("notification for {id} closed (reason {reason}), showing it again");
+        } else {
+            tracing::warn!("notification for {id} keeps being closed (reason {reason}); not re-showing");
+        }
     }
 
     /// Map a notification button click back to the alarm it belongs to.
