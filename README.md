@@ -8,7 +8,7 @@ Launcher are D-Bus clients of it; it keeps working when they're closed.
 | File            | Role |
 |-----------------|------|
 | `src/main.rs`   | startup, scheduler loop, notification-button handling |
-| `src/dbus.rs`   | the `org.example.Clockd1` D-Bus API |
+| `src/dbus.rs`   | the `org.mechanix.services.Clock` D-Bus API |
 | `src/core.rs`   | shared state, what's due, ringing/snooze/dismiss |
 | `src/model.rs`  | `Alarm` / `Timer` and next-occurrence logic (+ tests) |
 | `src/waker.rs`  | timerfd on `CLOCK_REALTIME_ALARM`: wakes from suspend, detects clock changes |
@@ -21,10 +21,10 @@ Launcher are D-Bus clients of it; it keeps working when they're closed.
 
     cargo run
     # in another terminal
-    busctl --user call org.example.Clockd1 /org/example/Clockd1 org.example.Clockd1 AddTimer us 10 "Tea"
-    busctl --user call org.example.Clockd1 /org/example/Clockd1 org.example.Clockd1 AddAlarm yyys 7 30 31 "Work"
-    busctl --user get-property org.example.Clockd1 /org/example/Clockd1 org.example.Clockd1 NextAlarm
-    busctl --user monitor org.example.Clockd1     # watch AlarmRinging / TimerFinished
+    busctl --user call org.mechanix.services.Clock /org/mechanix/services/Clock org.mechanix.services.Clock AddTimer us 10 "Tea"
+    busctl --user call org.mechanix.services.Clock /org/mechanix/services/Clock org.mechanix.services.Clock AddAlarm yyys 7 30 31 "Work"
+    busctl --user get-property org.mechanix.services.Clock /org/mechanix/services/Clock org.mechanix.services.Clock NextAlarm
+    busctl --user monitor org.mechanix.services.Clock     # watch AlarmRinging / TimerFinished
 
 `days` is a bitmask: bit 0 = Monday ... bit 6 = Sunday (31 = weekdays, 127 = every day, 0 = once).
 

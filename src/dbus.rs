@@ -1,14 +1,14 @@
 //! The D-Bus API your clock UI and launcher talk to.
 //!
-//!   service:   org.example.Clockd1
-//!   object:    /org/example/Clockd1
-//!   interface: org.example.Clockd1
+//!   service:   org.mechanix.services.Clock
+//!   object:    /org/mechanix/services/Clock
+//!   interface: org.mechanix.services.Clock
 //!
 //! Try it with busctl:
-//!   busctl --user call org.example.Clockd1 /org/example/Clockd1 \
-//!       org.example.Clockd1 AddAlarm yyys 7 30 31 "Work"
-//!   busctl --user get-property org.example.Clockd1 /org/example/Clockd1 \
-//!       org.example.Clockd1 NextAlarm
+//!   busctl --user call org.mechanix.services.Clock /org/mechanix/services/Clock \
+//!       org.mechanix.services.Clock AddAlarm yyys 7 30 31 "Work"
+//!   busctl --user get-property org.mechanix.services.Clock /org/mechanix/services/Clock \
+//!       org.mechanix.services.Clock NextAlarm
 
 use crate::core::Core;
 use crate::model::{Alarm, Timer};
@@ -16,8 +16,8 @@ use chrono::Local;
 use std::sync::Arc;
 use zbus::{fdo, interface, object_server::SignalEmitter};
 
-pub const BUS_NAME: &str = "org.example.Clockd1";
-pub const OBJECT_PATH: &str = "/org/example/Clockd1";
+pub const BUS_NAME: &str = "org.mechanix.services.Clock";
+pub const OBJECT_PATH: &str = "/org/mechanix/services/Clock";
 
 pub struct ClockdIface {
     pub core: Arc<Core>,
@@ -27,7 +27,7 @@ fn err(e: anyhow::Error) -> fdo::Error {
     fdo::Error::Failed(e.to_string())
 }
 
-#[interface(name = "org.example.Clockd1")]
+#[interface(name = "org.mechanix.services.Clock")]
 impl ClockdIface {
     // ---------- alarms ----------
 
