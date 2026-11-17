@@ -3,6 +3,7 @@
 use crate::model::{Alarm, Timer};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -24,23 +25,47 @@ fn state_path() -> Result<PathBuf> {
 }
 
 impl State {
+    /// A file that doesn't parse is moved aside to `state.json.bad` and we
+    /// start empty: losing the alarms is bad, but a daemon that refuses to
+    /// start means no alarm ever rings again until someone fixes it by hand.
     pub fn load() -> Result<Self> {
         let path = state_path()?;
-        match std::fs::read_to_string(&path) {
-            Ok(s) => Ok(serde_json::from_str(&s)
-                .with_context(|| format!("parsing {}", path.display()))?),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e.into()),
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(e.into()),
+        };
+        match serde_json::from_slice(&bytes) {
+            Ok(state) => Ok(state),
+            Err(e) => {
+                let bad = path.with_extension("json.bad");
+                tracing::error!(
+                    "{} is corrupt ({e}); moved to {} and starting with no alarms",
+                    path.display(),
+                    bad.display()
+                );
+                std::fs::rename(&path, &bad)
+                    .with_context(|| format!("moving aside {}", path.display()))?;
+                Ok(Self::default())
+            }
         }
     }
 
-    /// Write to a temp file and rename, so a crash mid-write
-    /// never leaves a half-written state file behind.
+    /// Write to a temp file and rename, so a crash mid-write never leaves a
+    /// half-written state file behind. The fsyncs make that hold across a
+    /// power cut too: without them the rename can reach the disk before the
+    /// data, leaving an empty state.json.
     pub fn save(&self) -> Result<()> {
         let path = state_path()?;
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&serde_json::to_vec_pretty(self)?)?;
+        file.sync_all()?;
+        drop(file);
         std::fs::rename(&tmp, &path)?;
+        if let Some(dir) = path.parent() {
+            std::fs::File::open(dir)?.sync_all()?;
+        }
         Ok(())
     }
 }

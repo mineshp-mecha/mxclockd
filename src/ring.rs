@@ -117,9 +117,17 @@ impl Ringing {
 }
 
 /// Play the file once with PipeWire, falling back to PulseAudio's player.
+///
+/// The stream is tagged `media.role=Alarm` (pw-play would default to
+/// "Music"), so WirePlumber can give alarms their own volume and routing.
 async fn play_once(path: &str) -> bool {
-    for player in ["pw-play", "paplay"] {
-        let status = Command::new(player).arg(path).kill_on_drop(true).status().await;
+    let players: [(&str, &[&str]); 2] = [
+        ("pw-play", &["--media-role", "Alarm"]),
+        ("paplay", &["--property=media.role=Alarm"]),
+    ];
+    for (player, role_args) in players {
+        let status =
+            Command::new(player).args(role_args).arg(path).kill_on_drop(true).status().await;
         if matches!(status, Ok(s) if s.success()) {
             return true;
         }
